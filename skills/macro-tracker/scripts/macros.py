@@ -324,6 +324,14 @@ def water_status(profile: dict, total_ml: float) -> str:
     return s + (t["water_left"].format(left=liters(left, t)) if left > 0 else t["water_done"])
 
 
+def water_line(store: Store, profile: dict, day: str, extra_ml: float = 0) -> list[str]:
+    """The 💧 status line for the day, when the user tracks water."""
+    water = sum(e["ml"] for e in day_water(store, day)) + extra_ml
+    if not (water or (profile.get("water") or {}).get("target_ml")):
+        return []
+    return [text(profile)["water_today"].format(status=water_status(profile, water))]
+
+
 def parse_water(profile: dict, amount: str, count: float) -> tuple[float, str | None]:
     """'500', '500ml', '1,5l' or a container name from profile.water.containers -> (ml, container)."""
     raw = amount.strip().lower().replace(" ", "")
@@ -494,7 +502,7 @@ def cmd_log(store: Store, args) -> str:
     detail = [f"  · {r['name']}" + (f" {r['g']:g} g" if r["g"] else "") + f": {r['kcal']:.0f} kcal"
               + (" ~" if r["source"] == "estimate" else "") for r in resolved]
     meals = day_meals(store, day) + [entry]
-    tail = remaining_lines(profile, date.fromisoformat(day), meals)
+    tail = remaining_lines(profile, date.fromisoformat(day), meals) + water_line(store, profile, day)
     if any(r["source"] == "estimate" for r in resolved):
         tail.append(t["estimate"])
     if args.dry_run:
@@ -522,7 +530,8 @@ def cmd_water(store: Store, args) -> str:
     store.append(entry)
     write_journal(store, profile, day)
     total = sum(e["ml"] for e in day_water(store, day))
-    return "\n".join([t["water_logged"].format(ml=num(ml, t), status=water_status(profile, total)),
+    food = remaining_lines(profile, date.fromisoformat(day), day_meals(store, day))[-1:]
+    return "\n".join([t["water_logged"].format(ml=num(ml, t), status=water_status(profile, total)), *food,
                       f"id: {entry['id']}"])
 
 
@@ -566,9 +575,7 @@ def today_report(store: Store, profile: dict, day: date, short: bool) -> str:
         est = " ~" if any(i["source"] == "estimate" for i in m["items"]) else ""
         out.append(f"- {m['time']} {m['meal']}: {num(m['totals']['kcal'], t)} kcal{est} "
                    f"(P {num(m['totals']['protein'], t)}) [id {m['id']}]")
-    out += remaining_lines(profile, day, meals)
-    if has_water:
-        out.append(t["water_today"].format(status=water_status(profile, water)))
+    out += remaining_lines(profile, day, meals) + water_line(store, profile, day.isoformat())
     return "\n".join(out)
 
 

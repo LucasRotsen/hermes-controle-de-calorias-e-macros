@@ -156,6 +156,15 @@ class MacrosTest(unittest.TestCase):
             self.assertEqual(code, 1, amount)
             self.assertTrue(err.startswith("Error:"), err)
 
+    def test_replies_show_food_and_water_left(self):
+        self.set_water()
+        meal = self.log({"date": THURSDAY, "items": [{"taco": 3, "g": 150}]})
+        self.assertIn("Faltam 1.808 kcal", meal)
+        self.assertIn("💧 Água: 0/3 L (faltam 3 L)", meal)
+        water = self.run_ok("water", "garrafa", "--date", THURSDAY)
+        self.assertIn("hoje 0,65/3 L (faltam 2,35 L)", water)
+        self.assertIn("Faltam 1.808 kcal", water)
+
     def test_undo_water(self):
         self.set_water()
         self.run_ok("water", "garrafa")

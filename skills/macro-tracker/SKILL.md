@@ -1,7 +1,7 @@
 ---
 name: macro-tracker
 description: "Track calories, macros and water by chat: log meals by text, audio or photo ('almocei 150 g de arroz e um filé de frango'), water ('tomei uma garrafa de água'), answer 'quanto falta hoje?', record weigh-ins, and manage daily targets. Brazilian foods via the TACO table (UNICAMP); the script does all the math."
-version: 1.1.0
+version: 1.2.0
 author: Lucas Rotsen
 license: MIT
 platforms: [linux, macos]
@@ -106,7 +106,8 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
 - A container they named: `macros water garrafa`, with `--count 2` for "duas garrafas" (`--count 0,5` for half).
   Use the container key exactly as in their profile; if the word is not there, convert with
   `references/household-measures.md` and pass ml, then offer to save it as a container.
-- Reply with the 💧 line as printed. Do not remind or nag about water unless they ask.
+- Reply with the lines as printed (💧 status and calories left). Do not remind or nag about water unless
+  they ask.
 
 ## Other requests
 
@@ -122,6 +123,9 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
 - **Change targets**: only when they ask. Patch with `profile set`, then show `macros today --short`.
 
 ## Rules
+
+- Say something was logged only after the script printed its ✅ or 💧 line. If a command fails or you
+  did not run one, say so plainly.
 
 - No moralizing, no "good/bad food", no unsolicited advice. Free meals and over-target days are logged
   like any other.
