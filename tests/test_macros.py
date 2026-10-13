@@ -134,6 +134,46 @@ class MacrosTest(unittest.TestCase):
         self.assertIn("Katch-McArdle: 1925", out)  # 370 + 21.6 × 72 kg lean
         self.assertIn("protein 158 g", out)  # 2.2 × 72
 
+    def set_water(self):
+        self.run_ok("profile", "set", json.dumps({"water": {"target_ml": 3000, "containers": {"garrafa": 650}}}))
+
+    def test_water_ml_litres_and_container(self):
+        self.set_water()
+        self.assertIn("+500 ml · hoje 0,5/3 L (faltam 2,5 L)", self.run_ok("water", "500ml", "--date", THURSDAY))
+        self.assertIn("+650 ml", self.run_ok("water", "garrafa", "--date", THURSDAY))
+        self.assertIn("+1.300 ml", self.run_ok("water", "Garrafas", "--count", "2", "--date", THURSDAY))
+        out = self.run_ok("water", "1,5l", "--date", THURSDAY)
+        self.assertIn("hoje 3,95/3 L ✅", out)
+        short = self.run_ok("today", "--date", THURSDAY, "--short")
+        self.assertIn("💧 3,95/3 L", short)
+        note = (self.journal / f"{THURSDAY}.md").read_text()
+        self.assertIn("water_ml: 3950", note)
+
+    def test_water_rejects_ambiguous_amounts(self):
+        self.set_water()
+        for amount in ("2", "copo", "0ml", "6000"):
+            code, _, err = self.run_cli("water", amount)
+            self.assertEqual(code, 1, amount)
+            self.assertTrue(err.startswith("Error:"), err)
+
+    def test_undo_water(self):
+        self.set_water()
+        self.run_ok("water", "garrafa")
+        self.assertIn("água (650 ml)", self.run_ok("undo"))
+
+    def test_water_target_shows_even_without_logs(self):
+        self.set_water()
+        self.log({"date": THURSDAY, "items": [{"taco": 3, "g": 100}]})
+        self.assertIn("💧 0/3 L (faltam 3 L)", self.run_ok("today", "--date", THURSDAY, "--short"))
+
+    def test_week_water_average(self):
+        self.set_water()
+        self.run_ok("water", "2l", "--date", THURSDAY)
+        self.run_ok("water", "3l", "--date", FRIDAY)
+        out = self.run_ok("week", "--end", FRIDAY, "--short")
+        self.assertIn("média 2,5 L/dia (2/7", out)
+        self.assertNotIn("nenhum registro", out)
+
     def test_english_locale(self):
         self.run_ok("profile", "set", json.dumps({"locale": "en"}))
         out = self.log({"date": THURSDAY, "items": [{"taco": 3, "g": 1000}]})

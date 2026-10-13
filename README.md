@@ -1,8 +1,8 @@
 # hermes-controle-de-calorias-e-macros
 
 A calorie and macro tracker skill for [Hermes Agent](https://github.com/NousResearch/hermes-agent) (and any
-agent that reads `SKILL.md` skills). Log meals by chat (text, voice or photo), ask how much is left today,
-record weigh-ins. Brazilian foods come from the **TACO** table (NEPA-UNICAMP, 597 foods).
+agent that reads `SKILL.md` skills). Log meals and water by chat (text, voice or photo), ask how much is left
+today, record weigh-ins. Brazilian foods come from the **TACO** table (NEPA-UNICAMP, 597 foods).
 
 ```
 você: almocei 150 g de arroz, uma concha de feijão e um filé de frango grelhado
@@ -46,6 +46,7 @@ python3 $S profile set '{"locale":"en","timezone":"UTC","targets":{"default":{"k
 python3 $S search frango grelhado
 python3 $S log '{"meal":"Lunch","items":[{"taco":410,"g":120},{"taco":3,"g":150}]}'
 python3 $S today
+python3 $S water 500
 python3 $S weight 80.4
 python3 $S week
 ```
@@ -55,8 +56,8 @@ workflow and the `log` JSON format.
 
 ## Português
 
-Skill de controle de calorias e macros para o Hermes. Você registra refeições pelo chat (texto, áudio ou
-foto), pergunta quanto falta no dia e registra o peso. Os alimentos vêm da tabela TACO, e quem faz as contas
+Skill de controle de calorias, macros e água para o Hermes. Você registra refeições e água pelo chat (texto,
+áudio ou foto), pergunta quanto falta no dia e registra o peso. Os alimentos vêm da tabela TACO, e quem faz as contas
 é um script, não o modelo.
 
 1. Instale: `hermes skills install LucasRotsen/hermes-controle-de-calorias-e-macros/skills/macro-tracker --category health`
@@ -64,7 +65,8 @@ foto), pergunta quanto falta no dia e registra o peso. Os alimentos vêm da tabe
 3. Diga "quero controlar minhas calorias". O agente pergunta peso, altura, objetivo e metas, e salva tudo
    em `~/.hermes/macros`.
 
-Metas podem variar por dia da semana, com reserva de calorias para uma refeição livre. Atalhos guardam
+Metas podem variar por dia da semana, com reserva de calorias para uma refeição livre. A meta de água e os
+seus recipientes ("garrafa" = 650 ml) ficam no perfil, então "tomei uma garrafa" já vira 650 ml. Atalhos guardam
 refeições que se repetem com os números exatos.
 
 ## Data and disclaimer

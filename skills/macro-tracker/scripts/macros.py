@@ -4,7 +4,7 @@
 Data lives in one folder per user ($MACROS_HOME, default ~/.hermes/macros):
   profile.json   body data, targets, locale, timezone, optional journal_dir
   foods.json     custom foods (per 100 g, optional unit size) and shortcuts (fixed meals)
-  log.jsonl      append-only: meals, weigh-ins, and voids (undo)
+  log.jsonl      append-only: meals, water, weigh-ins, and voids (undo)
 
 Commands (JSON arguments are single-quoted strings):
   profile show | profile set '<json patch>'
@@ -13,6 +13,7 @@ Commands (JSON arguments are single-quoted strings):
   food add '<json>' | food list
   shortcut add '<json>' | shortcut list | shortcut remove <key>
   log '<json>' [--dry-run]
+  water <ml | 1.5l | container> [--count N] [--date YYYY-MM-DD]
   undo [entry_id]
   today [--date YYYY-MM-DD] [--short]
   week [--end YYYY-MM-DD] [--short]
@@ -24,6 +25,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import secrets
 import sys
 import unicodedata
@@ -60,7 +62,12 @@ TEXT = {
         "week": "🍽️ 7 dias: média {kcal} kcal/dia ({days}/7 dias registrados) · proteína na meta em {hit}/{days}",
         "week_empty": "🍽️ 7 dias: nenhum registro",
         "j_title": "Nutrição", "j_total": "Total", "j_meals": "Refeições", "j_weight": "Peso",
-        "j_avg": "média 7 dias",
+        "j_avg": "média 7 dias", "j_water": "Água",
+        "water_logged": "💧 +{ml} ml · hoje {status}",
+        "water_status": "{total}/{target} L", "water_left": " (faltam {left} L)", "water_done": " ✅ meta do dia",
+        "water_today": "💧 Água: {status}",
+        "water_week": "💧 7 dias: média {avg} L/dia ({days}/7 dias registrados)",
+        "voided_water": "↩️ Removido: água ({ml} ml)",
     },
     "en": {
         "wd": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), "dec": ".", "thou": ",", "fat": "F",
@@ -79,7 +86,12 @@ TEXT = {
         "week": "🍽️ 7 days: average {kcal} kcal/day ({days}/7 days logged) · protein on target {hit}/{days}",
         "week_empty": "🍽️ 7 days: nothing logged",
         "j_title": "Nutrition", "j_total": "Total", "j_meals": "Meals", "j_weight": "Weight",
-        "j_avg": "7-day average",
+        "j_avg": "7-day average", "j_water": "Water",
+        "water_logged": "💧 +{ml} ml · today {status}",
+        "water_status": "{total}/{target} L", "water_left": " ({left} L left)", "water_done": " ✅ daily target",
+        "water_today": "💧 Water: {status}",
+        "water_week": "💧 7 days: average {avg} L/day ({days}/7 days logged)",
+        "voided_water": "↩️ Removed: water ({ml} ml)",
     },
 }
 
@@ -294,6 +306,44 @@ def day_totals(meals: list[dict]) -> dict:
     return total
 
 
+def day_water(store: Store, day: str) -> list[dict]:
+    return [e for e in store.entries() if e.get("type") == "water" and e["date"] == day]
+
+
+def liters(ml: float, t: dict) -> str:
+    s = num(ml / 1000, t, 2)
+    return s.rstrip("0").rstrip(t["dec"]) or "0"
+
+
+def water_status(profile: dict, total_ml: float) -> str:
+    t, target = text(profile), (profile.get("water") or {}).get("target_ml")
+    if not target:
+        return f"{liters(total_ml, t)} L"
+    s = t["water_status"].format(total=liters(total_ml, t), target=liters(target, t))
+    left = target - total_ml
+    return s + (t["water_left"].format(left=liters(left, t)) if left > 0 else t["water_done"])
+
+
+def parse_water(profile: dict, amount: str, count: float) -> tuple[float, str | None]:
+    """'500', '500ml', '1,5l' or a container name from profile.water.containers -> (ml, container)."""
+    raw = amount.strip().lower().replace(" ", "")
+    m = re.fullmatch(r"(\d+(?:[.,]\d+)?)(ml|l)?", raw)
+    if m:
+        value = float(m[1].replace(",", "."))
+        if m[2] == "l":
+            return value * 1000 * count, None
+        if m[2] is None and value < 20:
+            raise UserError("Give millilitres (500) or litres with 'l' (1.5l)")
+        return value * count, None
+    containers = (profile.get("water") or {}).get("containers") or {}
+    want = " ".join(tokens(amount))
+    for name, ml in containers.items():
+        if " ".join(tokens(name)) == want:
+            return float(ml) * count, name
+    known = ", ".join(containers) or "none set (profile water.containers)"
+    raise UserError(f"Unknown amount '{amount}'. Use ml, litres, or a container: {known}")
+
+
 # ---------- commands ----------
 
 def cmd_profile(store: Store, args) -> str:
@@ -454,22 +504,46 @@ def cmd_log(store: Store, args) -> str:
     return "\n".join([head, *detail, *tail, f"id: {entry['id']}"])
 
 
+def cmd_water(store: Store, args) -> str:
+    profile = store.profile()
+    t = text(profile)
+    if args.count <= 0:
+        raise UserError("--count must be positive")
+    ml, container = parse_water(profile, args.amount, args.count)
+    if not 0 < ml <= 5000:
+        raise UserError("Water per entry must be between 1 and 5000 ml")
+    now = now_in(profile)
+    day = args.date or now.date().isoformat()
+    date.fromisoformat(day)
+    entry = {"id": f"w-{now:%Y%m%d%H%M%S}-{secrets.token_hex(2)}", "type": "water", "date": day,
+             "time": now.strftime("%H:%M"), "ml": round(ml), "ts": now.isoformat()}
+    if container:
+        entry["container"] = container
+    store.append(entry)
+    write_journal(store, profile, day)
+    total = sum(e["ml"] for e in day_water(store, day))
+    return "\n".join([t["water_logged"].format(ml=num(ml, t), status=water_status(profile, total)),
+                      f"id: {entry['id']}"])
+
+
 def cmd_undo(store: Store, args) -> str:
     profile = store.profile()
     t = text(profile)
-    meals = [e for e in store.entries() if e.get("type") == "meal"]
+    active = [e for e in store.entries() if e.get("type") in ("meal", "water")]
     if args.entry_id:
-        target = next((m for m in meals if m["id"] == args.entry_id), None)
+        target = next((e for e in active if e["id"] == args.entry_id), None)
         if target is None:
-            raise UserError(f"No active meal with id {args.entry_id}")
+            raise UserError(f"No active meal or water entry with id {args.entry_id}")
     else:
         today = now_in(profile).date().isoformat()
-        todays = [m for m in meals if m["date"] == today]
+        todays = [e for e in active if e["date"] == today]
         if not todays:
             return t["nothing"]
         target = todays[-1]
     store.append({"type": "void", "target": target["id"], "ts": now_in(profile).isoformat()})
     write_journal(store, profile, target["date"])
+    if target["type"] == "water":
+        return t["voided_water"].format(ml=num(target["ml"], t))
     return t["voided"].format(meal=target["meal"], kcal=num(target["totals"]["kcal"], t))
 
 
@@ -477,20 +551,25 @@ def today_report(store: Store, profile: dict, day: date, short: bool) -> str:
     t, tgt = text(profile), targets_for(profile, day)
     meals = day_meals(store, day.isoformat())
     total = day_totals(meals)
-    if not meals and short:
+    water = sum(e["ml"] for e in day_water(store, day.isoformat()))
+    has_water = water > 0 or (profile.get("water") or {}).get("target_ml")
+    if not meals and not water and short:
         return t["today_empty"]
     line = t["today"].format(kcal=num(total["kcal"], t), tk=num(tgt.get("kcal", 0), t),
                              p=num(total["protein"], t), tp=num(tgt.get("protein", 0), t),
                              c=num(total["carbs"], t), tc=num(tgt.get("carbs", 0), t),
                              f=num(total["fat"], t), tf=num(tgt.get("fat", 0), t))
     if short:
-        return line
+        return line + (f" · 💧 {water_status(profile, water)}" if has_water else "")
     out = [line]
     for m in meals:
         est = " ~" if any(i["source"] == "estimate" for i in m["items"]) else ""
         out.append(f"- {m['time']} {m['meal']}: {num(m['totals']['kcal'], t)} kcal{est} "
                    f"(P {num(m['totals']['protein'], t)}) [id {m['id']}]")
-    return "\n".join(out + remaining_lines(profile, day, meals))
+    out += remaining_lines(profile, day, meals)
+    if has_water:
+        out.append(t["water_today"].format(status=water_status(profile, water)))
+    return "\n".join(out)
 
 
 def cmd_today(store: Store, args) -> str:
@@ -548,9 +627,16 @@ def cmd_week(store: Store, args) -> str:
         avg = sum(r[1]["kcal"] for r in rows) / len(rows)
         hit = sum(1 for _, total, tgt in rows if total["protein"] >= 0.9 * tgt.get("protein", 0))
         lines.append(t["week"].format(kcal=num(avg, t), days=len(rows), hit=hit))
-    else:
-        lines.append(t["week_empty"])
     entries = store.entries()
+    start = (end - timedelta(days=6)).isoformat()
+    by_day: dict[str, float] = {}
+    for e in entries:
+        if e.get("type") == "water" and start <= e["date"] <= end.isoformat():
+            by_day[e["date"]] = by_day.get(e["date"], 0) + e["ml"]
+    if not rows and not by_day:
+        lines.append(t["week_empty"])
+    if by_day:
+        lines.append(t["water_week"].format(avg=liters(sum(by_day.values()) / len(by_day), t), days=len(by_day)))
     avg_w = weight_avg(entries, end)
     if avg_w is not None:
         last = [e for e in entries if e.get("type") == "weight" and e["date"] <= end.isoformat()][-1]
@@ -570,8 +656,9 @@ def write_journal(store: Store, profile: dict, day: str) -> Path | None:
     t, d = text(profile), date.fromisoformat(day)
     meals = day_meals(store, day)
     weights = [e for e in store.entries() if e.get("type") == "weight" and e["date"] == day]
+    water = sum(e["ml"] for e in day_water(store, day))
     path = Path(jdir) / f"{day}.md"
-    if not meals and not weights:
+    if not meals and not weights and not water:
         if path.exists():
             path.unlink()
         return None
@@ -581,6 +668,8 @@ def write_journal(store: Store, profile: dict, day: str) -> Path | None:
         f"kcal: {round(total['kcal'])}", f"protein: {round(total['protein'])}",
         f"carbs: {round(total['carbs'])}", f"fat: {round(total['fat'])}",
     ]
+    if water:
+        lines.append(f"water_ml: {round(water)}")
     if weights:
         lines.append(f"weight_kg: {weights[-1]['kg']}")
     lines += ["---", "", f"# {t['j_title']} · {t['wd'][d.weekday()]}, {d:%d/%m}", ""]
@@ -600,6 +689,8 @@ def write_journal(store: Store, profile: dict, day: str) -> Path | None:
                              f"{num(i['fat'], t)}")
             if m.get("note"):
                 lines.append(f"- _{m['note']}_")
+    if water:
+        lines += ["", f"## {t['j_water']}", "", water_status(profile, water)]
     if weights:
         avg = weight_avg(store.entries(), d)
         lines += ["", f"## {t['j_weight']}", "",
@@ -649,6 +740,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("json")
     s.add_argument("--dry-run", action="store_true")
 
+    s = sub.add_parser("water")
+    s.add_argument("amount")
+    s.add_argument("--count", type=lambda v: float(v.replace(",", ".")), default=1.0)
+    s.add_argument("--date")
+
     s = sub.add_parser("undo")
     s.add_argument("entry_id", nargs="?")
 
@@ -677,7 +773,7 @@ def main(argv=None) -> int:
         "profile": lambda: cmd_profile(store, args), "calc": lambda: cmd_calc(args),
         "search": lambda: cmd_search(store, args), "food": lambda: cmd_food(store, args),
         "shortcut": lambda: cmd_shortcut(store, args), "log": lambda: cmd_log(store, args),
-        "undo": lambda: cmd_undo(store, args), "today": lambda: cmd_today(store, args),
+        "water": lambda: cmd_water(store, args), "undo": lambda: cmd_undo(store, args), "today": lambda: cmd_today(store, args),
         "week": lambda: cmd_week(store, args), "weight": lambda: cmd_weight(store, args),
         "journal": lambda: cmd_journal(store, args),
     }
