@@ -255,6 +255,49 @@ class MacrosTest(unittest.TestCase):
             self.log({"date": THURSDAY, "meal": meal, "items": [{"name": "x", "kcal": 1, "protein": 0, "carbs": 0, "fat": 0}]})
         self.assertIn("Todas as refeições", self.run_ok("next", "--date", THURSDAY, "--time", "22:00"))
 
+    def weigh(self, day, kg, *extra):
+        return self.run_ok("weight", str(kg), "--date", day, *extra)
+
+    def test_weight_metrics_and_checkin_first(self):
+        self.weigh("2026-10-05", "118,0", "--bf", "28,6", "--metrics", '{"muscle_kg": 78.0, "visceral": 14}')
+        out = self.run_ok("checkin", "--date", "2026-10-05")
+        self.assertIn("Check-in · seg 05/10", out)
+        self.assertIn("primeira pesagem", out)
+        code, _, err = self.run_cli("weight", "117", "--metrics", '{"muscle_kg": "alto"}')
+        self.assertEqual(code, 1)
+        self.assertIn("metrics must be", err)
+
+    def test_checkin_trend_body_food_and_verdict(self):
+        self.run_ok("profile", "set", json.dumps({"goal_rate": {"min": 0.5, "max": 1.0, "fast": 1.2},
+                                                  "checkin_rules": ["parado 2–3 semanas: +2.000 passos/dia"],
+                                                  "water": {"target_ml": 3000}}))
+        self.weigh("2026-09-28", 119.0)
+        self.weigh("2026-10-05", 118.0, "--bf", "28,6", "--metrics", '{"muscle_kg": 78.0}')
+        self.weigh("2026-10-12", 117.2, "--bf", "28,1", "--metrics", '{"muscle_kg": 78.2}')
+        self.log({"date": "2026-10-08", "meal": "Almoço", "items": [{"name": "x", "kcal": 2000, "protein": 150, "carbs": 1, "fat": 1}]})
+        self.log({"date": "2026-10-09", "meal": "Almoço", "items": [{"name": "x", "kcal": 1800, "protein": 100, "carbs": 1, "fat": 1}]})
+        self.log({"date": "2026-10-12", "meal": "Café", "items": [{"name": "x", "kcal": 500, "protein": 30, "carbs": 1, "fat": 1}]})
+        self.run_ok("water", "3000", "--date", "2026-10-08")
+        self.run_ok("water", "2000", "--date", "2026-10-09")
+        out = self.run_ok("checkin", "--date", "2026-10-12")
+        self.assertIn("117,2 kg · −0,8 kg desde 05/10 (−0,80 kg/sem)", out)
+        self.assertIn("Ritmo em 2 semanas: −0,90 kg/sem (3 pesagens)", out)
+        self.assertIn("bf_pct 28,6 → 28,1 · muscle_kg 78,0 → 78,2", out)
+        # 05/10–11/10 window: the 12/10 breakfast belongs to the next week
+        self.assertIn("2/7 com registro · média 1.900 kcal (meta 2.150) · proteína na meta em 1/2", out)  # Fri target 2,300
+        self.assertIn("média 2,5 L · meta batida em 1/2 dias", out)
+        self.assertIn("Ritmo dentro da faixa (0,5–1,0 kg/sem)", out)
+        self.assertIn("Regras de ajuste: parado 2–3 semanas", out)
+
+    def test_checkin_counts_slow_weeks_and_fast_loss(self):
+        self.run_ok("profile", "set", json.dumps({"goal_rate": {"min": 0.5, "max": 1.0, "fast": 1.2}}))
+        for day, kg in (("2026-09-21", 120.0), ("2026-09-28", 119.0), ("2026-10-05", 118.8), ("2026-10-12", 118.9)):
+            self.weigh(day, kg)
+        self.assertIn("Peso subindo: ritmo abaixo da faixa (0,5–1,0 kg/sem) há 2 semana(s)",
+                      self.run_ok("checkin", "--date", "2026-10-12"))
+        self.weigh("2026-10-19", 117.4)
+        self.assertIn("acima de 1,2 kg/sem", self.run_ok("checkin", "--date", "2026-10-19"))
+
     def test_english_locale(self):
         self.run_ok("profile", "set", json.dumps({"locale": "en"}))
         out = self.log({"date": THURSDAY, "items": [{"taco": 3, "g": 1000}]})

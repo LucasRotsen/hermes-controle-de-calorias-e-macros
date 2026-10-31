@@ -17,7 +17,8 @@ Commands (JSON arguments are single-quoted strings):
   undo [entry_id]
   today [--date YYYY-MM-DD] [--short]
   week [--end YYYY-MM-DD] [--short]
-  weight <kg> [--bf PCT] [--date YYYY-MM-DD]
+  weight <kg> [--bf PCT] [--metrics '<json>'] [--date YYYY-MM-DD]   metrics: other scale readings (muscle_kg, water_pct…)
+  checkin [--date YYYY-MM-DD]   weekly check-in: weight trend, body composition, last 7 days, goal-rate verdict
   journal [--date YYYY-MM-DD]
   next [--time HH:MM] [--meal KEY] [--date YYYY-MM-DD]   meal plan: next meal, its budget and options
 """
@@ -83,6 +84,21 @@ TEXT = {
         "next_last": "Última refeição do plano hoje",
         "next_rules": "Regras: {rules}",
         "next_done": "✅ Todas as refeições do plano de hoje já foram registradas",
+        "ck_title": "📋 Check-in · {d}",
+        "ck_weight": "⚖️ {kg} kg · {sign}{d} kg desde {prev} ({rsign}{rate} kg/sem)",
+        "ck_first": "⚖️ {kg} kg · primeira pesagem, ainda sem comparação",
+        "ck_none": "⚖️ Nenhuma pesagem registrada",
+        "ck_trend": "Ritmo em {weeks} semanas: {sign}{rate} kg/sem ({n} pesagens)",
+        "ck_body": "Composição desde {prev}: {changes}",
+        "ck_food": "🍽️ 7 dias: {days}/7 com registro · média {kcal} kcal (meta {tk}) · proteína na meta em {hit}/{days}",
+        "ck_food_none": "🍽️ 7 dias: nenhuma refeição registrada",
+        "ck_water": "💧 7 dias: média {avg} L · meta batida em {hit}/{days} dias",
+        "ck_in": "✅ Ritmo dentro da faixa ({lo}–{hi} kg/sem)",
+        "ck_slow": "⏸️ Ritmo abaixo da faixa ({lo}–{hi} kg/sem) há {n} semana(s) seguida(s)",
+        "ck_gain": "⏸️ Peso subindo: ritmo abaixo da faixa ({lo}–{hi} kg/sem) há {n} semana(s) seguida(s)",
+        "ck_bit_fast": "↗️ Ritmo um pouco acima da faixa ({lo}–{hi} kg/sem)",
+        "ck_fast": "⚠️ Ritmo acima de {fast} kg/sem",
+        "ck_rules": "Regras de ajuste: {rules}",
     },
     "en": {
         "wd": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), "dec": ".", "thou": ",", "fat": "F",
@@ -120,6 +136,21 @@ TEXT = {
         "next_last": "Last planned meal today",
         "next_rules": "Rules: {rules}",
         "next_done": "✅ Every planned meal for today is logged",
+        "ck_title": "📋 Check-in · {d}",
+        "ck_weight": "⚖️ {kg} kg · {sign}{d} kg since {prev} ({rsign}{rate} kg/week)",
+        "ck_first": "⚖️ {kg} kg · first weigh-in, nothing to compare yet",
+        "ck_none": "⚖️ No weigh-ins logged",
+        "ck_trend": "Rate over {weeks} weeks: {sign}{rate} kg/week ({n} weigh-ins)",
+        "ck_body": "Body composition since {prev}: {changes}",
+        "ck_food": "🍽️ 7 days: {days}/7 logged · average {kcal} kcal (target {tk}) · protein on target {hit}/{days}",
+        "ck_food_none": "🍽️ 7 days: no meals logged",
+        "ck_water": "💧 7 days: average {avg} L · target hit on {hit}/{days} days",
+        "ck_in": "✅ Rate within the range ({lo}–{hi} kg/week)",
+        "ck_slow": "⏸️ Rate below the range ({lo}–{hi} kg/week) for {n} week(s) in a row",
+        "ck_gain": "⏸️ Weight going up: rate below the range ({lo}–{hi} kg/week) for {n} week(s) in a row",
+        "ck_bit_fast": "↗️ Rate a bit above the range ({lo}–{hi} kg/week)",
+        "ck_fast": "⚠️ Rate above {fast} kg/week",
+        "ck_rules": "Adjustment rules: {rules}",
     },
 }
 
@@ -639,11 +670,111 @@ def cmd_weight(store: Store, args) -> str:
     entry = {"type": "weight", "date": day.isoformat(), "kg": args.kg, "ts": now_in(profile).isoformat()}
     if args.bf is not None:
         entry["bf"] = args.bf
+    if args.metrics:
+        metrics = parse_json(args.metrics, "metrics")
+        if not isinstance(metrics, dict) or not all(isinstance(v, (int, float)) for v in metrics.values()):
+            raise UserError("metrics must be a JSON object of numbers, e.g. {\"muscle_kg\": 78.2}")
+        entry["metrics"] = metrics
     store.append(entry)
     body = {"weight_kg": args.kg, **({"body_fat_pct": args.bf} if args.bf is not None else {})}
     store.write_json(store.profile_path, deep_merge(profile, {"body": body}))
     write_journal(store, store.profile(), day.isoformat())
     return weight_line(store, profile, day, args.kg)
+
+
+def weigh_ins(entries: list[dict], end: date) -> list[dict]:
+    """The last weigh-in of each day up to *end*, oldest first."""
+    by_day = {e["date"]: e for e in entries if e.get("type") == "weight" and e["date"] <= end.isoformat()}
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def signed(value: float, t: dict, decimals: int = 1) -> tuple[str, str]:
+    return ("+" if value > 0 else "−" if value < 0 else ""), num(abs(value), t, decimals)
+
+
+def cmd_checkin(store: Store, args) -> str:
+    """Weekly check-in, usually right after the weekly weigh-in: trend, body composition, last 7 days, verdict."""
+    profile = store.profile()
+    t = text(profile)
+    end = date.fromisoformat(args.date) if args.date else now_in(profile).date()
+    entries = store.entries()
+    lines = [t["ck_title"].format(d=f"{t['wd'][end.weekday()]} {end:%d/%m}")]
+
+    w = weigh_ins(entries, end)
+    weekly_rates = []  # kg/week between weigh-ins at least 5 days apart, newest first
+    if not w:
+        lines.append(t["ck_none"])
+    else:
+        last = w[-1]
+        last_day = date.fromisoformat(last["date"])
+        prev = next((e for e in reversed(w[:-1]) if (last_day - date.fromisoformat(e["date"])).days >= 5), None)
+        if prev is None:
+            lines.append(t["ck_first"].format(kg=num(last["kg"], t, 1)))
+        else:
+            days = (last_day - date.fromisoformat(prev["date"])).days
+            sign, d = signed(last["kg"] - prev["kg"], t)
+            rsign, rate = signed((last["kg"] - prev["kg"]) / days * 7, t, 2)
+            lines.append(t["ck_weight"].format(kg=num(last["kg"], t, 1), sign=sign, d=d, rsign=rsign, rate=rate,
+                                               prev=f"{date.fromisoformat(prev['date']):%d/%m}"))
+            # Rate over up to ~4 weeks: from the oldest weigh-in in the last 35 days, if it spans 2+ weeks.
+            window = [e for e in w if (last_day - date.fromisoformat(e["date"])).days <= 35]
+            span = (last_day - date.fromisoformat(window[0]["date"])).days
+            if span >= 14:
+                tsign, trate = signed((last["kg"] - window[0]["kg"]) / span * 7, t, 2)
+                lines.append(t["ck_trend"].format(weeks=round(span / 7), sign=tsign, rate=trate, n=len(window)))
+            # Body composition: bf plus any metric present in both weigh-ins.
+            a = {**({"bf_pct": prev["bf"]} if "bf" in prev else {}), **prev.get("metrics", {})}
+            b = {**({"bf_pct": last["bf"]} if "bf" in last else {}), **last.get("metrics", {})}
+            changes = [f"{k} {num(a[k], t, 1)} → {num(b[k], t, 1)}" for k in b if k in a]
+            if changes:
+                lines.append(t["ck_body"].format(prev=f"{date.fromisoformat(prev['date']):%d/%m}",
+                                                 changes=" · ".join(changes)))
+            anchor = last
+            for e in reversed(w[:-1]):
+                gap = (date.fromisoformat(anchor["date"]) - date.fromisoformat(e["date"])).days
+                if gap >= 5:
+                    weekly_rates.append((anchor["kg"] - e["kg"]) / gap * 7)
+                    anchor = e
+
+    # The 7 days before the check-in day (the weigh-in morning closes the week).
+    days = [end - timedelta(days=i) for i in range(7, 0, -1)]
+    logged = [(d, day_totals(day_meals(store, d.isoformat())), targets_for(profile, d)) for d in days
+              if day_meals(store, d.isoformat())]
+    if logged:
+        hit = sum(1 for _, tot, tgt in logged if tot["protein"] >= 0.9 * tgt.get("protein", 0))
+        lines.append(t["ck_food"].format(days=len(logged), hit=hit,
+                                         kcal=num(sum(r[1]["kcal"] for r in logged) / len(logged), t),
+                                         tk=num(sum(r[2].get("kcal", 0) for r in logged) / len(logged), t)))
+    else:
+        lines.append(t["ck_food_none"])
+    water = {}
+    for e in entries:
+        if e.get("type") == "water" and days[0].isoformat() <= e["date"] <= days[-1].isoformat():
+            water[e["date"]] = water.get(e["date"], 0) + e["ml"]
+    target_ml = (profile.get("water") or {}).get("target_ml")
+    if water:
+        hit = sum(1 for ml in water.values() if target_ml and ml >= target_ml)
+        lines.append(t["ck_water"].format(avg=liters(sum(water.values()) / len(water), t), hit=hit, days=len(water)))
+
+    goal = profile.get("goal_rate")  # weekly LOSS range in kg, e.g. {"min": 0.5, "max": 1.0, "fast": 1.2}
+    if goal and weekly_rates:
+        lo, hi = goal.get("min", 0), goal.get("max", 99)
+        fast = goal.get("fast", hi)
+        loss = -weekly_rates[0]
+        fmt = {"lo": num(lo, t, 1), "hi": num(hi, t, 1), "fast": num(fast, t, 1)}
+        if loss > fast:
+            lines.append(t["ck_fast"].format(**fmt))
+        elif loss > hi:
+            lines.append(t["ck_bit_fast"].format(**fmt))
+        elif loss >= lo:
+            lines.append(t["ck_in"].format(**fmt))
+        else:
+            n = next((i for i, r in enumerate(weekly_rates) if -r >= lo), len(weekly_rates))
+            lines.append(t["ck_gain" if loss < 0 else "ck_slow"].format(n=n, **fmt))
+    rules = profile.get("checkin_rules")
+    if rules:
+        lines.append(t["ck_rules"].format(rules=" · ".join(rules)))
+    return "\n".join(lines)
 
 
 def cmd_week(store: Store, args) -> str:
@@ -898,7 +1029,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("weight")
     s.add_argument("kg", type=lambda v: float(v.replace(",", ".")))
-    s.add_argument("--bf", type=float)
+    s.add_argument("--bf", type=lambda v: float(v.replace(",", ".")))
+    s.add_argument("--metrics")
+    s.add_argument("--date")
+
+    s = sub.add_parser("checkin")
     s.add_argument("--date")
 
     s = sub.add_parser("journal")
@@ -921,6 +1056,7 @@ def main(argv=None) -> int:
         "water": lambda: cmd_water(store, args), "undo": lambda: cmd_undo(store, args), "today": lambda: cmd_today(store, args),
         "week": lambda: cmd_week(store, args), "weight": lambda: cmd_weight(store, args),
         "journal": lambda: cmd_journal(store, args), "next": lambda: cmd_next(store, args),
+        "checkin": lambda: cmd_checkin(store, args),
     }
     try:
         print(handlers[args.cmd]())
