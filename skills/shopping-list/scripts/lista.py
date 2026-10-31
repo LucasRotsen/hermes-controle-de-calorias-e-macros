@@ -99,8 +99,11 @@ def label(item: dict) -> str:
     return item["name"] + (f" ({item['qty']})" if item.get("qty") else "")
 
 
+TODAY: date | None = None  # set by --today (tests and back-dating); None = the real date
+
+
 def today() -> date:
-    return date.fromisoformat(os.environ["SHOPPING_TODAY"]) if os.environ.get("SHOPPING_TODAY") else date.today()
+    return TODAY or date.today()
 
 
 def cmd_add(store: Store, raw: str) -> str:
@@ -206,6 +209,7 @@ def cmd_suggest(store: Store, limit: int) -> str:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--home", default=os.environ.get("SHOPPING_HOME") or str(Path.home() / ".hermes" / "shopping"))
+    p.add_argument("--today", type=date.fromisoformat, help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("add")
     s.add_argument("json")
@@ -217,6 +221,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("suggest")
     s.add_argument("--limit", type=int, default=8)
     args = p.parse_args(argv)
+    global TODAY
+    TODAY = args.today
     store = Store(Path(args.home).expanduser())
     try:
         out = {"add": lambda: cmd_add(store, args.json),

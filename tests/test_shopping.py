@@ -1,7 +1,6 @@
 import contextlib
 import io
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -15,16 +14,15 @@ class ShoppingTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = self.tmp.name
-        os.environ["SHOPPING_TODAY"] = "2026-11-01"
+        self.day = "2026-11-01"
 
     def tearDown(self):
-        os.environ.pop("SHOPPING_TODAY", None)
         self.tmp.cleanup()
 
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = lista.main(["--home", self.home, *argv])
+            code = lista.main(["--home", self.home, "--today", self.day, *argv])
         return code, out.getvalue(), err.getvalue()
 
     def ok(self, *argv):
@@ -69,14 +67,14 @@ class ShoppingTest(unittest.TestCase):
 
     def test_suggest_from_history(self):
         for day in ("2026-10-01", "2026-10-08", "2026-10-15"):
-            os.environ["SHOPPING_TODAY"] = day
+            self.day = day
             self.add({"name": "Ovos"}, {"name": "Banana"})
             self.ok("bought-all")
-        os.environ["SHOPPING_TODAY"] = "2026-10-20"
+        self.day = "2026-10-20"
         self.add({"name": "Detergente"})
         self.ok("remove", "detergente")  # bought once: not enough history
         self.add({"name": "banana"})  # already on the list: not suggested
-        os.environ["SHOPPING_TODAY"] = "2026-10-21"
+        self.day = "2026-10-21"
         out = self.ok("suggest")
         self.assertIn("Ovos · comprado 3x · a cada ~7 dias · último há 6 dias", out)
         self.assertNotIn("Banana", out)
