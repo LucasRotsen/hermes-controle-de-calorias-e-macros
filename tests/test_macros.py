@@ -216,8 +216,9 @@ class MacrosTest(unittest.TestCase):
         self.run_ok("profile", "set", json.dumps(self.PLAN))
         out = self.run_ok("next", "--date", THURSDAY, "--time", "17:00")
         self.assertIn("Próxima: Lanche", out)
-        # 2,000 kcal over lanche+jantar (400/800): 1,000
-        self.assertIn("~1.000 kcal", out)
+        # 2,000 kcal over lanche+jantar (400/800) = 1,000, capped at 1.5 × 400
+        self.assertIn("~600 kcal · P 45 C 60 G 15", out)
+        self.assertIn("Sem registro hoje: Café da manhã, Almoço", out)
 
     def test_next_late_breakfast_is_still_breakfast(self):
         self.run_ok("profile", "set", json.dumps(self.PLAN))
@@ -237,9 +238,9 @@ class MacrosTest(unittest.TestCase):
     def test_next_holds_back_the_reserve(self):
         self.run_ok("profile", "set", json.dumps(self.PLAN))
         out = self.run_ok("next", "--date", FRIDAY, "--time", "12:00")
-        # Friday: 2,300 − 1,000 reserve = 1,300 over almoço+lanche (jantar is the free meal): 600/1,000
+        # Friday: 2,300 − 1,000 reserve = 1,300 over almoço+lanche (jantar is the free meal): 600/1,000 = 780
         self.assertIn("fora a reserva jantar livre: 1.300 kcal", out)
-        self.assertIn("~780 kcal", out)
+        self.assertIn("~780 kcal · P 65 C 78 G 26", out)  # the plan's mix scaled by 780/600
         self.assertIn("Próxima: Café da manhã", self.run_ok("next", "--date", FRIDAY, "--time", "08:00"))
         out = self.run_ok("next", "--date", FRIDAY, "--time", "20:30")
         self.assertIn("refeição livre de hoje", out)

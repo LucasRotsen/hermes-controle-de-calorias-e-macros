@@ -1,7 +1,7 @@
 ---
 name: macro-tracker
 description: "Track calories, macros and water by chat: log meals by text, audio or photo ('almocei 150 g de arroz e um filé de frango'), water ('tomei uma garrafa de água'), answer 'quanto falta hoje?', suggest what to eat now from their meal plan ('o que eu como agora?'), record weigh-ins, and manage daily targets. Brazilian foods via the TACO table (UNICAMP); the script does all the math."
-version: 1.3.0
+version: 1.3.1
 author: Lucas Rotsen
 license: MIT
 platforms: [linux, macos]
@@ -147,7 +147,9 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
 - **"O que eu como agora?" / "e no jantar?" / "tenho frango e batata, o que faço?"**: suggest only when asked.
   1. Run `macros next` (add `--meal <key>` when they name the meal). It picks the next meal of the plan
      (a late breakfast is still breakfast; meals whose time passed unlogged count as skipped), splits what
-     is left today over the meals still ahead, and prints the plan's base, swaps and rules for it.
+     is left today over the meals still ahead (never above 1.5× the planned meal), lists meals not logged
+     yet, and prints the plan's base, swaps and rules for it. If it lists unlogged meals, ask once whether
+     they ate them before suggesting.
   2. Build 2 concrete options from the plan's base and swaps (and what they say they have at home), with
      grams. Steer to the gaps: protein short → more lean meat, eggs or whey; calories tight → keep the
      protein, cut the starch, vegetables at will; the day over target → the lightest option, no comment.

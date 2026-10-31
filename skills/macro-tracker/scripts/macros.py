@@ -36,6 +36,7 @@ from pathlib import Path
 DATA = Path(__file__).resolve().parent.parent / "data"
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 MACROS = ("protein", "carbs", "fat")
+MAX_MEAL_FACTOR = 1.5  # `next` never budgets a meal above 1.5× its planned size
 STOPWORDS = {"de", "da", "do", "das", "dos", "com", "e", "a", "o", "em", "of", "with", "and", "the"}
 # Everyday names that TACO spells differently. Single words map on exact match only.
 SYNONYMS = {
@@ -75,6 +76,7 @@ TEXT = {
         "next_day_left_reserve": "Sobra no dia, fora a reserva {label}: {kcal} kcal · P {p} C {c} G {f}",
         "next_day_over": "O dia já passou {kcal} kcal da meta",
         "next_budget": "Para esta refeição: ~{kcal} kcal · P {p} C {c} G {f} (no plano: {pk} kcal)",
+        "next_missed": "Sem registro hoje: {meals}. Se já comeu, registre para a conta ficar certa",
         "next_base": "Base do plano: {base}",
         "next_swaps": "Trocas: {swaps}",
         "next_after": "Depois: {meals}",
@@ -111,6 +113,7 @@ TEXT = {
         "next_day_left_reserve": "Left today, outside the {label} reserve: {kcal} kcal · P {p} C {c} F {f}",
         "next_day_over": "The day is already {kcal} kcal over target",
         "next_budget": "For this meal: ~{kcal} kcal · P {p} C {c} F {f} (planned: {pk} kcal)",
+        "next_missed": "Not logged today: {meals}. If eaten, log them so the numbers stay right",
         "next_base": "Plan: {base}",
         "next_swaps": "Swaps: {swaps}",
         "next_after": "After: {meals}",
@@ -808,10 +811,16 @@ def cmd_next(store: Store, args) -> str:
         left["kcal"] -= reserve["kcal"]
     later = [p for p in open_meals if p["time"] > chosen["time"] and p["key"] != free_key]
     rest = [chosen] + later
-    budget = {}
-    for k in ("kcal", *MACROS):
-        planned = sum(p[k] for p in rest)
-        budget[k] = max(left[k], 0) * (chosen[k] / planned if planned else 1 / len(rest))
+    # Calories: what is left, split by the plan's shares of the meals ahead, capped at 1.5× the planned meal
+    # (an unlogged morning usually means "not logged yet", not a 2,000 kcal dinner). Macros follow the plan's
+    # mix for that many calories, never above what is left of each.
+    planned_kcal = sum(p["kcal"] for p in rest)
+    share = chosen["kcal"] / planned_kcal if planned_kcal else 1 / len(rest)
+    budget = {"kcal": min(max(left["kcal"], 0) * share, chosen["kcal"] * MAX_MEAL_FACTOR)}
+    ratio = budget["kcal"] / chosen["kcal"] if chosen["kcal"] else 0
+    for k in MACROS:
+        budget[k] = min(chosen[k] * ratio, max(left[k], 0))
+    missed = [p["name"] for p in open_meals if p["time"] < chosen["time"]]
 
     lines = [t["next"].format(name=chosen["name"], time=chosen["time"], now=clock)]
     if left["kcal"] < 0:
@@ -824,6 +833,8 @@ def cmd_next(store: Store, args) -> str:
     lines.append(t["next_budget"].format(kcal=num(budget["kcal"], t), p=num(budget["protein"], t),
                                          c=num(budget["carbs"], t), f=num(budget["fat"], t),
                                          pk=num(chosen["kcal"], t)))
+    if missed:
+        lines.append(t["next_missed"].format(meals=", ".join(missed)))
     if chosen.get("base"):
         lines.append(t["next_base"].format(base=chosen["base"]))
     if chosen.get("swaps"):
