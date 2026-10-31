@@ -24,7 +24,7 @@ Script (Python 3.10+, stdlib only), called `macros` below:
 python3 ~/.hermes/skills/health/macro-tracker/scripts/macros.py <command>
 ```
 
-If that file does not exist, use `${HERMES_SKILL_DIR}/scripts/macros.py`. Data lives in `$MACROS_HOME`
+If that file does not exist, use `${HERMES_SKILL_DIR}/scripts/macros.py`, or locate it with `find / -name macros.py -path "*macro-tracker*" 2>/dev/null` (the sandbox home may be `/root`). Data lives in `$MACROS_HOME`
 (default `~/.hermes/macros`): `profile.json`, `foods.json`, `log.jsonl`. Never edit these files by hand.
 
 | Need | Command |
@@ -81,14 +81,30 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
    they use when logging it. `free_meal` names the plan meal that the day's `reserve` replaces. The plan
    lives only in their profile.
 
+## Reading labels
+
+- Take the product name from the front of the package in the photo, and match it to what the user said before
+  saving. A name said in text can belong to a different product on the same shelf; ask if they disagree.
+- Nutrition tables often show a per-100 g column and a per-serving column. Use the per-100 g column for
+  `food add`, and convert the serving column only to check it. If the two columns carry identical kcal and
+  protein values, the table is inconsistent: use the column that matches the ingredients (a powder with
+  protein and nuts is ~400 kcal/100 g), say so in the preview, and ask for the real figure.
+- Check the label's gram value of the serving ("1 colher de sopa = 20 g") before converting spoons to grams.
+- `food add` with an existing key overwrites that entry. Use this to fix a wrong custom food; the script has no delete.
+- A TACO item needs its numeric id (`"taco": 501`). Run `macros search` first; a name in `taco` fails.
+- Milk types and other staples missing from TACO (e.g. semidesnatado): log an estimate with `name`, `g` and
+  kcal/macros, and say the source in the preview. Do not map them to a different TACO row without saying so.
+
 ## Logging a meal
 
 1. **Split** the message into items with amounts. Check `shortcut list` once per conversation.
 2. **Match** each item, in this order:
    - a shortcut or custom food (exact, theirs);
    - `macros search …` in TACO. Pick the preparation that was eaten (cozido, grelhado, assado), not raw,
-     unless they ate it raw;
-   - a packaged product with a visible label: read the label and offer to save it as a custom food;
+     unless they ate it raw. If TACO has no row for the exact preparation (e.g. grelhado for pork), use the
+     closest one (assado, same cut) and name the proxy in the preview;
+   - a packaged product with a visible label: read the label and offer to save it as a custom food (see
+     "Reading labels" above);
    - otherwise, your own estimate as an item with `name`, `kcal`, `protein`, `carbs`, `fat` (and `g` if
      known). Estimates are marked `~`. A TACO row showing `?` has no value: estimate it instead.
 3. **Grams.** Use their number. Household measures (concha, colher, fatia, unidade): convert with
@@ -97,6 +113,8 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
    - Clear amounts: log right away.
    - Vague portions, photos, restaurant or mixed dishes: run with `--dry-run`, show the preview with the
      grams you assumed, and ask "✅ ou me corrige" in one message. Log only after the answer.
+   - Several portions of one dish ("dois pratos"): state in the preview whether the grams are per portion or
+     total, and multiply when they say per portion. Getting this wrong doubles or halves the meal.
 5. **Reply** with the script's lines as printed (the ✅ line and what is left), at most 5 lines. Add nothing
    else unless they asked something.
 
