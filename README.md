@@ -49,6 +49,7 @@ python3 $S today
 python3 $S water 500
 python3 $S weight 80.4
 python3 $S week
+python3 $S next            # with a meal plan in the profile: next meal, its budget and options
 ```
 
 Run `python3 $S --help` for every command, and see [SKILL.md](skills/macro-tracker/SKILL.md) for the agent

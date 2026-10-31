@@ -1,7 +1,7 @@
 ---
 name: macro-tracker
-description: "Track calories, macros and water by chat: log meals by text, audio or photo ('almocei 150 g de arroz e um filé de frango'), water ('tomei uma garrafa de água'), answer 'quanto falta hoje?', record weigh-ins, and manage daily targets. Brazilian foods via the TACO table (UNICAMP); the script does all the math."
-version: 1.2.0
+description: "Track calories, macros and water by chat: log meals by text, audio or photo ('almocei 150 g de arroz e um filé de frango'), water ('tomei uma garrafa de água'), answer 'quanto falta hoje?', suggest what to eat now from their meal plan ('o que eu como agora?'), record weigh-ins, and manage daily targets. Brazilian foods via the TACO table (UNICAMP); the script does all the math."
+version: 1.3.0
 author: Lucas Rotsen
 license: MIT
 platforms: [linux, macos]
@@ -39,6 +39,7 @@ If that file does not exist, use `${HERMES_SKILL_DIR}/scripts/macros.py`. Data l
 | Undo | `macros undo` (last meal or water today) · `macros undo <id>` |
 | Where they stand | `macros today` · `macros today --short` · `macros week` |
 | Weigh-in | `macros weight 81,4 [--bf 22]` |
+| Next meal from the plan | `macros next` · `macros next --meal jantar` |
 
 ## First use: setup
 
@@ -66,6 +67,19 @@ planned free meal: the script shows what is left outside it. `water.containers` 
 per day, rewritten after every change. `locale`: `pt-BR` or `en`.
 3. Ask for meals they repeat and save them as shortcuts, and save packaged staples (whey, milk, yogurt) as
    custom foods from the label.
+4. If they follow a meal plan (from a nutritionist or their own), save it so you can suggest meals:
+
+```json
+{"plan": {"meals": [{"key": "almoco", "name": "Almoço", "time": "12:30", "kcal": 640, "protein": 55, "carbs": 55,
+                     "fat": 22, "aliases": ["almocei"], "base": "150 g de arroz, 160 g de frango, salada",
+                     "swaps": ["arroz ↔ macarrão 150 g ↔ batata 180 g", "frango ↔ patinho ↔ lombo"]}],
+          "free_meal": {"sat": "jantar"},
+          "rules": ["sem frituras", "verduras à vontade"]}}
+```
+
+   `time` is when the meal is planned; `kcal`/macros are its share of the day. `aliases` are the other words
+   they use when logging it. `free_meal` names the plan meal that the day's `reserve` replaces. The plan
+   lives only in their profile.
 
 ## Logging a meal
 
@@ -112,8 +126,18 @@ per day, rewritten after every change. `locale`: `pt-BR` or `en`.
 ## Other requests
 
 - **"Quanto falta?" / "como estou hoje?"**: `macros today` (includes water), answer in ≤ 4 lines.
-- **"O que eu como no jantar?"**: run `macros today`, then suggest 2 concrete options from their shortcuts or
-  TACO that fit what is left. Check each with `--dry-run` before quoting its numbers.
+- **"O que eu como agora?" / "e no jantar?" / "tenho frango e batata, o que faço?"**: suggest only when asked.
+  1. Run `macros next` (add `--meal <key>` when they name the meal). It picks the next meal of the plan
+     (a late breakfast is still breakfast; meals whose time passed unlogged count as skipped), splits what
+     is left today over the meals still ahead, and prints the plan's base, swaps and rules for it.
+  2. Build 2 concrete options from the plan's base and swaps (and what they say they have at home), with
+     grams. Steer to the gaps: protein short → more lean meat, eggs or whey; calories tight → keep the
+     protein, cut the starch, vegetables at will; the day over target → the lightest option, no comment.
+  3. Check each option with `macros log '<json>' --dry-run` and adjust grams until it fits the budget line.
+     Quote only the numbers the dry run printed.
+  4. Reply in ≤ 6 lines: the two options with their kcal and protein, then one line with what is left after.
+     Do not log anything until they say what they ate.
+  No plan in the profile: run `macros today` and suggest from their shortcuts or TACO the same way.
 - **Corrections** ("foi 200 g", "apaga o lanche", "não era uma garrafa"): `macros undo` removes the latest
   entry today; for an older one, find its id in `macros today` or the log reply, `macros undo <id>`, then
   log the corrected entry. Confirm in one line.

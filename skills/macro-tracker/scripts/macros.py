@@ -19,6 +19,7 @@ Commands (JSON arguments are single-quoted strings):
   week [--end YYYY-MM-DD] [--short]
   weight <kg> [--bf PCT] [--date YYYY-MM-DD]
   journal [--date YYYY-MM-DD]
+  next [--time HH:MM] [--meal KEY] [--date YYYY-MM-DD]   meal plan: next meal, its budget and options
 """
 
 import argparse
@@ -68,6 +69,18 @@ TEXT = {
         "water_today": "💧 Água: {status}",
         "water_week": "💧 7 dias: média {avg} L/dia ({days}/7 dias registrados)",
         "voided_water": "↩️ Removido: água ({ml} ml)",
+        "next": "🍽️ Próxima: {name} (plano {time}) · agora {now}",
+        "next_free": "🍔 Próxima: {name} é a refeição livre de hoje · reserva {reserve} kcal",
+        "next_day_left": "Sobra no dia: {kcal} kcal · P {p} C {c} G {f}",
+        "next_day_left_reserve": "Sobra no dia, fora a reserva {label}: {kcal} kcal · P {p} C {c} G {f}",
+        "next_day_over": "O dia já passou {kcal} kcal da meta",
+        "next_budget": "Para esta refeição: ~{kcal} kcal · P {p} C {c} G {f} (no plano: {pk} kcal)",
+        "next_base": "Base do plano: {base}",
+        "next_swaps": "Trocas: {swaps}",
+        "next_after": "Depois: {meals}",
+        "next_last": "Última refeição do plano hoje",
+        "next_rules": "Regras: {rules}",
+        "next_done": "✅ Todas as refeições do plano de hoje já foram registradas",
     },
     "en": {
         "wd": ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"), "dec": ".", "thou": ",", "fat": "F",
@@ -92,6 +105,18 @@ TEXT = {
         "water_today": "💧 Water: {status}",
         "water_week": "💧 7 days: average {avg} L/day ({days}/7 days logged)",
         "voided_water": "↩️ Removed: water ({ml} ml)",
+        "next": "🍽️ Next: {name} (planned {time}) · now {now}",
+        "next_free": "🍔 Next: {name} is today's free meal · reserve {reserve} kcal",
+        "next_day_left": "Left today: {kcal} kcal · P {p} C {c} F {f}",
+        "next_day_left_reserve": "Left today, outside the {label} reserve: {kcal} kcal · P {p} C {c} F {f}",
+        "next_day_over": "The day is already {kcal} kcal over target",
+        "next_budget": "For this meal: ~{kcal} kcal · P {p} C {c} F {f} (planned: {pk} kcal)",
+        "next_base": "Plan: {base}",
+        "next_swaps": "Swaps: {swaps}",
+        "next_after": "After: {meals}",
+        "next_last": "Last planned meal today",
+        "next_rules": "Rules: {rules}",
+        "next_done": "✅ Every planned meal for today is logged",
     },
 }
 
@@ -714,6 +739,103 @@ def cmd_journal(store: Store, args) -> str:
     return f"Wrote {path}" if path else "No journal_dir configured, or nothing logged that day."
 
 
+# ---------- meal plan ----------
+
+def plan_meals(profile: dict) -> list[dict]:
+    meals = ((profile.get("plan") or {}).get("meals")) or []
+    if not meals:
+        raise UserError("No meal plan in the profile. Add one with profile set '{\"plan\": {\"meals\": [...]}}'.")
+    for m in meals:
+        if not m.get("key") or not m.get("name") or not re.fullmatch(r"\d{2}:\d{2}", str(m.get("time", ""))):
+            raise UserError(f"Plan meal needs key, name and time HH:MM: {m}")
+        for k in ("kcal", *MACROS):
+            if not isinstance(m.get(k), (int, float)) or m[k] < 0:
+                raise UserError(f"Plan meal {m['key']} needs a number for {k}")
+    return sorted(meals, key=lambda m: m["time"])
+
+
+def plan_match(meal: dict, logged: dict) -> bool:
+    words = [meal["key"], meal["name"], *meal.get("aliases", [])]
+    name = f" {' '.join(normalize(logged.get('meal', '')).split())} "
+    return any(f" {' '.join(normalize(w).split())} " in name for w in words if normalize(w).strip())
+
+
+def cmd_next(store: Store, args) -> str:
+    profile = store.profile()
+    t, plan = text(profile), plan_meals(profile)
+    now = now_in(profile)
+    day = date.fromisoformat(args.date) if args.date else now.date()
+    clock = args.time or now.strftime("%H:%M")
+    if not re.fullmatch(r"\d{2}:\d{2}", clock):
+        raise UserError("--time must be HH:MM")
+    tgt, logged = targets_for(profile, day), day_meals(store, day.isoformat())
+    reserve = tgt.get("reserve")
+    free_key = ((profile.get("plan") or {}).get("free_meal") or {}).get(WEEKDAYS[day.weekday()]) if reserve else None
+    free_logged = any(m.get("free") for m in logged)
+
+    # Each logged meal claims the first plan meal its name matches; the free meal is claimed by free: true.
+    done = set()
+    for m in logged:
+        if m.get("free") and free_key:
+            done.add(free_key)
+            continue
+        hit = next((p for p in plan if p["key"] not in done and plan_match(p, m)), None)
+        if hit:
+            done.add(hit["key"])
+    open_meals = [p for p in plan if p["key"] not in done]
+
+    if args.meal:
+        chosen = next((p for p in plan if plan_match(p, {"meal": args.meal})), None)
+        if not chosen:
+            raise UserError(f"No plan meal matches {args.meal!r}. Plan: {', '.join(p['key'] for p in plan)}")
+    else:
+        # The latest open meal that is due within the hour; earlier open meals count as skipped.
+        h, mnt = map(int, clock.split(":"))
+        soon = f"{min(h + 1, 23):02d}:{mnt:02d}"
+        due = [p for p in open_meals if p["time"] <= soon]
+        chosen = due[-1] if due else (open_meals[0] if open_meals else None)
+    total = day_totals(logged)
+    left = {k: tgt.get(k, 0) - total[k] for k in total}
+    if chosen is None:
+        return "\n".join([t["next_done"]] + remaining_lines(profile, day, logged))
+
+    if chosen["key"] == free_key and not free_logged:
+        lines = [t["next_free"].format(name=chosen["name"], reserve=num(reserve["kcal"], t))]
+        return "\n".join(lines + remaining_lines(profile, day, logged))
+
+    # Calories for the structured meals: hold back the reserve until the free meal is logged.
+    if reserve and not free_logged:
+        left["kcal"] -= reserve["kcal"]
+    later = [p for p in open_meals if p["time"] > chosen["time"] and p["key"] != free_key]
+    rest = [chosen] + later
+    budget = {}
+    for k in ("kcal", *MACROS):
+        planned = sum(p[k] for p in rest)
+        budget[k] = max(left[k], 0) * (chosen[k] / planned if planned else 1 / len(rest))
+
+    lines = [t["next"].format(name=chosen["name"], time=chosen["time"], now=clock)]
+    if left["kcal"] < 0:
+        lines.append(t["next_day_over"].format(kcal=num(-left["kcal"], t)))
+    else:
+        key = "next_day_left_reserve" if reserve and not free_logged else "next_day_left"
+        lines.append(t[key].format(label=(reserve or {}).get("label", ""), kcal=num(left["kcal"], t),
+                                   p=num(max(left["protein"], 0), t), c=num(max(left["carbs"], 0), t),
+                                   f=num(max(left["fat"], 0), t)))
+    lines.append(t["next_budget"].format(kcal=num(budget["kcal"], t), p=num(budget["protein"], t),
+                                         c=num(budget["carbs"], t), f=num(budget["fat"], t),
+                                         pk=num(chosen["kcal"], t)))
+    if chosen.get("base"):
+        lines.append(t["next_base"].format(base=chosen["base"]))
+    if chosen.get("swaps"):
+        lines.append(t["next_swaps"].format(swaps=" · ".join(chosen["swaps"])))
+    after = [f"{p['name']} {p['time']}" for p in open_meals if p["time"] > chosen["time"]]
+    lines.append(t["next_after"].format(meals=" · ".join(after)) if after else t["next_last"])
+    rules = (profile.get("plan") or {}).get("rules")
+    if rules:
+        lines.append(t["next_rules"].format(rules=" · ".join(rules)))
+    return "\n".join(lines)
+
+
 # ---------- CLI ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -770,6 +892,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("journal")
     s.add_argument("--date")
+
+    s = sub.add_parser("next")
+    s.add_argument("--time")
+    s.add_argument("--meal")
+    s.add_argument("--date")
     return p
 
 
@@ -782,7 +909,7 @@ def main(argv=None) -> int:
         "shortcut": lambda: cmd_shortcut(store, args), "log": lambda: cmd_log(store, args),
         "water": lambda: cmd_water(store, args), "undo": lambda: cmd_undo(store, args), "today": lambda: cmd_today(store, args),
         "week": lambda: cmd_week(store, args), "weight": lambda: cmd_weight(store, args),
-        "journal": lambda: cmd_journal(store, args),
+        "journal": lambda: cmd_journal(store, args), "next": lambda: cmd_next(store, args),
     }
     try:
         print(handlers[args.cmd]())

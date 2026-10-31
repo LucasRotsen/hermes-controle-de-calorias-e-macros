@@ -183,6 +183,77 @@ class MacrosTest(unittest.TestCase):
         self.assertIn("média 2,5 L/dia (2/7", out)
         self.assertNotIn("nenhum registro", out)
 
+    PLAN = {"plan": {
+        "free_meal": {"fri": "jantar"},
+        "rules": ["sem frituras"],
+        "meals": [
+            {"key": "cafe", "name": "Café da manhã", "time": "08:00", "kcal": 600, "protein": 40, "carbs": 60, "fat": 20,
+             "aliases": ["cafe"], "base": "pão, ovos", "swaps": ["pão francês"]},
+            {"key": "almoco", "name": "Almoço", "time": "12:30", "kcal": 600, "protein": 50, "carbs": 60, "fat": 20},
+            {"key": "lanche", "name": "Lanche", "time": "16:45", "kcal": 400, "protein": 30, "carbs": 40, "fat": 10},
+            {"key": "jantar", "name": "Jantar", "time": "20:30", "kcal": 400, "protein": 30, "carbs": 40, "fat": 15,
+             "aliases": ["janta"]},
+        ]}}
+
+    def test_next_without_plan_is_an_error(self):
+        code, _, err = self.run_cli("next", "--date", THURSDAY, "--time", "08:00")
+        self.assertEqual(code, 1)
+        self.assertIn("No meal plan", err)
+
+    def test_next_splits_what_is_left_over_remaining_meals(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        self.log({"date": THURSDAY, "time": "08:10", "meal": "Café da manhã",
+                  "items": [{"name": "x", "kcal": 600, "protein": 40, "carbs": 60, "fat": 20}]})
+        out = self.run_ok("next", "--date", THURSDAY, "--time", "12:00")
+        self.assertIn("Próxima: Almoço (plano 12:30)", out)
+        self.assertIn("Sobra no dia: 1.400 kcal", out)
+        # 1,400 kcal over almoço+lanche+jantar (600/1,400): 600; protein 110 × 50/110 = 50
+        self.assertIn("~600 kcal · P 50", out)
+        self.assertIn("Depois: Lanche 16:45 · Jantar 20:30", out)
+        self.assertIn("Regras: sem frituras", out)
+
+    def test_next_skips_missed_meals_and_rebalances(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        out = self.run_ok("next", "--date", THURSDAY, "--time", "17:00")
+        self.assertIn("Próxima: Lanche", out)
+        # 2,000 kcal over lanche+jantar (400/800): 1,000
+        self.assertIn("~1.000 kcal", out)
+
+    def test_next_late_breakfast_is_still_breakfast(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        out = self.run_ok("next", "--date", THURSDAY, "--time", "11:00")
+        self.assertIn("Próxima: Café da manhã", out)
+        self.assertIn("Base do plano: pão, ovos", out)
+        self.assertIn("Trocas: pão francês", out)
+
+    def test_next_meal_flag_and_alias(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        self.log({"date": THURSDAY, "meal": "Janta", "items": [{"name": "x", "kcal": 300, "protein": 20, "carbs": 30, "fat": 10}]})
+        out = self.run_ok("next", "--date", THURSDAY, "--time", "07:00", "--meal", "almoco")
+        self.assertIn("Próxima: Almoço", out)
+        self.assertIn("Depois: Lanche 16:45", out)
+        self.assertNotIn("Jantar 20:30", out)  # "Janta" was logged and claims the jantar slot
+
+    def test_next_holds_back_the_reserve(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        out = self.run_ok("next", "--date", FRIDAY, "--time", "12:00")
+        # Friday: 2,300 − 1,000 reserve = 1,300 over almoço+lanche (jantar is the free meal): 600/1,000
+        self.assertIn("fora a reserva jantar livre: 1.300 kcal", out)
+        self.assertIn("~780 kcal", out)
+        self.assertIn("Próxima: Café da manhã", self.run_ok("next", "--date", FRIDAY, "--time", "08:00"))
+        out = self.run_ok("next", "--date", FRIDAY, "--time", "20:30")
+        self.assertIn("refeição livre de hoje", out)
+
+    def test_next_when_day_is_over_target_and_all_done(self):
+        self.run_ok("profile", "set", json.dumps(self.PLAN))
+        self.log({"date": THURSDAY, "meal": "Almoço", "items": [{"name": "x", "kcal": 2100, "protein": 10, "carbs": 10, "fat": 10}]})
+        out = self.run_ok("next", "--date", THURSDAY, "--time", "16:30")
+        self.assertIn("passou 100 kcal", out)
+        self.assertIn("~0 kcal", out)
+        for meal in ("Café da manhã", "Lanche", "Jantar"):
+            self.log({"date": THURSDAY, "meal": meal, "items": [{"name": "x", "kcal": 1, "protein": 0, "carbs": 0, "fat": 0}]})
+        self.assertIn("Todas as refeições", self.run_ok("next", "--date", THURSDAY, "--time", "22:00"))
+
     def test_english_locale(self):
         self.run_ok("profile", "set", json.dumps({"locale": "en"}))
         out = self.log({"date": THURSDAY, "items": [{"taco": 3, "g": 1000}]})
