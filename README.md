@@ -54,7 +54,7 @@ python3 $S checkin         # weekly check-in: weight trend, body composition, la
 ```
 
 The repo also ships a **shopping-list** skill (`skills/shopping-list`): add, show and remove items by chat,
-and suggestions from what you usually buy. Install it the same way, with `.../skills/shopping-list`.
+receipt photos recorded as purchases, and suggestions from what you usually buy. Install it the same way, with `.../skills/shopping-list`.
 
 Run `python3 $S --help` for every command, and see [SKILL.md](skills/macro-tracker/SKILL.md) for the agent
 workflow and the `log` JSON format.

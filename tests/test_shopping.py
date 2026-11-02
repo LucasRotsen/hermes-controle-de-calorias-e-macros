@@ -83,6 +83,37 @@ class ShoppingTest(unittest.TestCase):
     def test_suggest_without_history(self):
         self.assertIn("histórico suficiente", self.ok("suggest"))
 
+    def test_receipt_records_and_takes_off_the_list(self):
+        self.add({"name": "Leite zero lactose", "qty": "6"}, {"name": "Salsinha"}, {"name": "Saco de lixo cozinha"},
+                 {"name": "Saco de lixo banheiro"})
+        out = self.ok("receipt", json.dumps([{"name": "leite zero lactose"}, {"name": "sal"}, {"name": "saco de lixo"},
+                                             "banana", {"name": "Banana"}]), "--date", "2026-10-30", "--store", "Ponte Preta")
+        self.assertIn("Cupom registrado: 4 itens (Ponte Preta) em 30/10.", out)
+        self.assertIn("Saiu da lista: Leite zero lactose (6)", out)
+        self.assertIn("Primeira compra registrada: leite zero lactose · sal · saco de lixo · banana", out)
+        listing = self.ok("list")
+        self.assertIn("Salsinha", listing)  # "sal" is a different word
+        self.assertIn("Saco de lixo cozinha", listing)  # ambiguous: recorded, left on the list
+        events = [json.loads(line) for line in Path(self.home, "history.jsonl").read_text().splitlines()]
+        self.assertEqual({e["date"] for e in events}, {"2026-10-30"})
+        self.assertEqual({e["store"] for e in events}, {"Ponte Preta"})
+        self.assertEqual(len(events), 4)
+        out = self.ok("receipt", json.dumps(["banana"]))
+        self.assertNotIn("Primeira compra", out)
+
+    def test_receipt_feeds_suggestions_and_known(self):
+        self.assertIn("Nenhuma compra", self.ok("known"))
+        for d in ("2026-10-04", "2026-10-11", "2026-10-18"):
+            self.ok("receipt", json.dumps(["banana", "leite"]), "--date", d)
+        self.assertIn("banana · comprado 3x · a cada ~7 dias · último há 14 dias", self.ok("suggest"))
+        self.assertEqual(self.ok("known").splitlines(), ["Itens já comprados (2):", "banana", "leite"])
+
+    def test_receipt_rejects_bad_input(self):
+        for bad in ("[]", "[{}]", "nope"):
+            code, _, err = self.run_cli("receipt", bad)
+            self.assertEqual(code, 1)
+            self.assertIn("Error", err)
+
     def test_rejects_bad_input(self):
         code, _, err = self.run_cli("add", '[{"qty": "2"}]')
         self.assertEqual(code, 1)
